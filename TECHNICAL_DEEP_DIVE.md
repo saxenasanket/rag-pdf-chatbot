@@ -1002,6 +1002,351 @@ For typical use (100 PDFs, 1000 chat queries):
 
 ---
 
+## Deployment on Render: Infrastructure & Data Flow
+
+### What is Render?
+
+**Render** is a cloud platform (similar to Heroku, Railway, Fly.io) that:
+- Hosts Docker containers
+- Provides persistent storage (disks)
+- Manages environment variables
+- Handles auto-scaling and networking
+- Supports GitHub auto-deployment
+
+### Render Architecture for This App
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Render.com Cloud                      │
+│                                                          │
+│  ┌──────────────────────────────────────────────┐      │
+│  │         Docker Container (Web Service)        │      │
+│  │  ┌────────────────────────────────────────┐  │      │
+│  │  │  Ephemeral Filesystem (Temporary)      │  │      │
+│  │  │  - App code                            │  │      │
+│  │  │  - Python runtime                      │  │      │
+│  │  │  - Installed packages                  │  │      │
+│  │  │  - /tmp directory (lost on restart)    │  │      │
+│  │  └────────────────────────────────────────┘  │      │
+│  │                    ↓                         │      │
+│  │  ┌────────────────────────────────────────┐  │      │
+│  │  │  FastAPI Server (uvicorn)               │  │      │
+│  │  │  - Listening on port 8000               │  │      │
+│  │  │  - Forwarded to public HTTPS URL        │  │      │
+│  │  │  - Auto-restarts on crash               │  │      │
+│  │  └────────────────────────────────────────┘  │      │
+│  └──────────────────────────────────────────────┘      │
+│                                                          │
+│  ┌──────────────────────────────────────────────┐      │
+│  │    Persistent Disk (/app/data, 1GB)         │      │
+│  │  - Survives container restarts              │      │
+│  │  - NOT wiped on redeploy                    │      │
+│  │  - Mounted at /app/data inside container    │      │
+│  │                                              │      │
+│  │  ├─ /app/data/uploads/                      │      │
+│  │  │  └─ {uuid}.pdf (original PDFs)           │      │
+│  │  │                                           │      │
+│  │  ├─ /app/data/chroma/                       │      │
+│  │  │  └─ Vector database (Chroma storage)     │      │
+│  │  │     - Embeddings for all chunks          │      │
+│  │  │     - Metadata (source, page, etc)       │      │
+│  │  │                                           │      │
+│  │  └─ /app/data/documents.json                │      │
+│  │     └─ Registry of uploaded documents       │      │
+│  │        (status, page counts, etc)           │      │
+│  └──────────────────────────────────────────────┘      │
+│                                                          │
+│  ┌──────────────────────────────────────────────┐      │
+│  │    Environment Variables (Encrypted)         │      │
+│  │  - ANTHROPIC_API_KEY                         │      │
+│  │  - VOYAGE_API_KEY                            │      │
+│  │  - EMBEDDING_PROVIDER                        │      │
+│  │  - CLAUDE_MODEL                              │      │
+│  │  - etc                                        │      │
+│  └──────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────┘
+            ↓ HTTPS               ↑ HTTP
+        (public URL)          (backend API)
+            ↓                     ↑
+┌─────────────────────────────────────────────────────────┐
+│              Browser (Frontend)                          │
+│  - HTML/CSS/JavaScript (served from container)          │
+│  - Runs on user's computer                              │
+│  - Makes API calls to /api/documents and /api/chat      │
+└─────────────────────────────────────────────────────────┘
+            ↓                     ↑
+        (questions)          (answers)
+            ↓                     ↑
+┌─────────────────────────────────────────────────────────┐
+│           External APIs (Internet)                       │
+│  - Anthropic Claude API                                 │
+│  - Voyage AI Embeddings API                             │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Data Residency & Storage
+
+#### **Ephemeral Storage (Lost on Restart)**
+
+These are stored in the container's temporary filesystem and are **wiped** when the container restarts:
+
+```
+/tmp/                          # Temporary files
+/app/.venv/                    # Virtual environment cache
+/usr/local/lib/python*/        # Installed packages
+```
+
+**Important:** This is why we need persistent volumes for data!
+
+#### **Persistent Disk Storage (/app/data, 1GB)**
+
+This disk **survives** container restarts and redeploys:
+
+```
+/app/data/
+├─ uploads/
+│  ├─ abc123-uuid-1.pdf       # User-uploaded PDF (5MB)
+│  ├─ def456-uuid-2.pdf       # User-uploaded PDF (8MB)
+│  └─ ghi789-uuid-3.pdf       # User-uploaded PDF (3MB)
+│
+├─ chroma/                      # Vector database
+│  ├─ chroma-collections.db     # Chroma metadata (SQLite)
+│  └─ 0_...f_embedding.parquet  # Vectors (1M entries = ~100MB)
+│
+└─ documents.json               # Registry
+   {
+     "abc123-uuid-1": {
+       "filename": "report.pdf",
+       "status": "ready",
+       "pages": 45,
+       "chunks": 200
+     }
+   }
+```
+
+**Why persistent?** Without this, every time Render restarts the container (daily or after code updates), all uploaded PDFs and embeddings would be lost!
+
+#### **Code & Runtime (Ephemeral)**
+
+These are rebuilt every deploy from GitHub:
+
+```
+/app/                          # Application code
+  ├─ main.py
+  ├─ config.py
+  ├─ api/
+  ├─ core/
+  └─ static/
+```
+
+When you push to GitHub:
+1. Render detects the push
+2. Builds a new Docker image (installs packages, compiles everything)
+3. Stops old container
+4. Starts new container with old persistent disk attached
+5. New code runs, old data persists
+
+### How Environment Variables Work on Render
+
+**Set in Render Dashboard:**
+
+```
+Render Web Service → Environment tab → Add Variable:
+
+ANTHROPIC_API_KEY = sk-ant-your-key
+VOYAGE_API_KEY = pa-your-key
+EMBEDDING_PROVIDER = voyage
+```
+
+**Read by app at startup:**
+
+```python
+# app/config.py
+class Settings(BaseSettings):
+    anthropic_api_key: str  # ← Render injects this from env
+    voyage_api_key: str
+    embedding_provider: str
+    
+settings = Settings()  # ← Reads from os.environ
+```
+
+**Important:** Never put API keys in code or `.env` files in git!
+
+### Complete Request/Response Flow on Render
+
+#### **Upload Flow**
+
+```
+Browser
+  │ FormData: [file1.pdf, file2.pdf]
+  ▼
+HTTPS → Render HTTPS Gateway
+  │
+  ▼
+FastAPI Server (uvicorn on :8000)
+  │
+  ├─ POST /api/documents/
+  ├─ Validate PDFs
+  ├─ Save to /app/data/uploads/{uuid}.pdf
+  ├─ Create registry entry in /app/data/documents.json
+  ├─ Return 202 (Accepted) immediately
+  │
+  └─ Background Task (in same Python process):
+     ├─ Extract text from PDF (pypdf)
+     ├─ Call Voyage AI (external) → embeddings
+     ├─ Store in Chroma (reads/writes to /app/data/chroma/)
+     └─ Update registry in /app/data/documents.json
+
+Browser polls GET /api/documents/
+  │ (checks registry status)
+  ▼
+Registry shows: "ready (45 pages, 200 chunks)"
+```
+
+#### **Chat Flow**
+
+```
+Browser
+  │ {message: "What is Q3 revenue?", history: [...]}
+  ▼
+POST /api/chat/
+  │
+  ▼
+FastAPI → RAG Engine:
+  ├─ Embed question → Call Voyage AI (external)
+  ├─ Query Chroma → Read from /app/data/chroma/
+  ├─ Build context from retrieved chunks
+  ├─ Call Anthropic Claude (external)
+  └─ Return {answer, sources}
+
+Browser shows:
+  - Answer: "Q3 revenue was $4.2M..."
+  - Sources: [report.pdf — p.12]
+```
+
+### Render Restart Scenarios
+
+#### **Scenario A: Code Update (Push to GitHub)**
+
+```
+What's preserved:
+  ✅ /app/data/uploads/         (persistent disk)
+  ✅ /app/data/chroma/          (persistent disk)
+  ✅ /app/data/documents.json   (persistent disk)
+  ❌ Old Python packages        (rebuilt)
+  ❌ Old container              (replaced)
+
+Timeline:
+  1. Push to GitHub
+  2. Render detects push
+  3. Builds new Docker image
+  4. Stops old container
+  5. Old persistent disk detached
+  6. New container starts
+  7. New persistent disk attached (same /app/data)
+  8. App runs with old data! ✅
+```
+
+#### **Scenario B: Render Auto-Restart (Crash/Daily)**
+
+```
+What's preserved:
+  ✅ /app/data/uploads/         (persistent disk stays mounted)
+  ✅ /app/data/chroma/          (persistent disk stays mounted)
+  ✅ /app/data/documents.json   (persistent disk stays mounted)
+  ❌ Temporary cache            (lost)
+  ❌ Running processes          (killed)
+
+Timeline:
+  1. Container crashes or Render restarts it
+  2. Container stops
+  3. Persistent disk detaches
+  4. New container starts
+  5. Persistent disk reattached at /app/data
+  6. App runs with old data! ✅
+```
+
+#### **Scenario C: No Persistent Disk (What Would Happen)**
+
+```
+❌ Container crashes
+❌ All /app/data wiped
+❌ All PDFs lost
+❌ All embeddings lost
+❌ Registry wiped
+❌ Users see "No documents uploaded"
+
+This is why persistent disk is CRITICAL!
+```
+
+### Monitoring & Debugging on Render
+
+#### **View Live Logs**
+
+Render Dashboard → Your Service → Logs tab:
+
+```
+Sep 28 10:40:09 AM  [jdhnr]  Initialization
+Sep 28 10:40:09 AM  [jdhnr]  File "/app/app/main.py", line 7, in <module>
+Sep 28 10:40:09 AM  [jdhnr]  from app.api import documents, chat
+Sep 28 10:40:09 AM  [jdhnr]  INFO:     Uvicorn running on http://0.0.0.0:8000
+Sep 28 10:40:09 AM  [jdhnr]  INFO:     Application startup complete
+```
+
+#### **Check Persistent Disk Usage**
+
+Render Dashboard → Settings → Disks:
+
+```
+Mount Path: /app/data
+Size: 1 GB
+Used: 250 MB (PDFs + Chroma + registry)
+Available: 750 MB
+```
+
+If nearing 1 GB limit:
+- Delete old PDFs
+- Or request larger disk from Render
+
+#### **Test API Endpoints**
+
+```bash
+# Health check
+curl https://your-app.onrender.com/health
+
+# List documents
+curl https://your-app.onrender.com/api/documents/
+
+# Note: HTTPS is automatic on Render
+```
+
+### Security on Render
+
+#### **API Keys (Encrypted)**
+
+- Stored in Render's encrypted vault
+- Never logged or visible in container
+- Injected at runtime into `process.env`
+- Example:
+  ```python
+  os.getenv('ANTHROPIC_API_KEY')  # Safe
+  print(settings.anthropic_api_key)  # Never do this!
+  ```
+
+#### **Network**
+
+- Container ↔ Render gateway: Private
+- Browser ↔ Render gateway: HTTPS (automatic)
+- Container ↔ External APIs: HTTPS
+
+#### **Persistent Disk**
+
+- Encrypted at rest
+- Mounted with read/write to /app/data only
+- Not accessible from other services
+
+---
+
 ## Summary
 
 This RAG system:
