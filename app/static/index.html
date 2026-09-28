@@ -435,7 +435,19 @@
         // File input change handler
         document.getElementById('fileInput').addEventListener('change', (e) => {
             selectedFiles = Array.from(e.target.files);
+            updateFileLabel();
         });
+
+        // Update file label to show selected filenames
+        function updateFileLabel() {
+            const fileLabel = document.querySelector('.file-label');
+            if (selectedFiles.length === 0) {
+                fileLabel.textContent = 'Click to select PDFs or drag & drop';
+            } else {
+                const names = selectedFiles.map(f => f.name).join(', ');
+                fileLabel.textContent = `${selectedFiles.length} file(s): ${names}`;
+            }
+        }
 
         // Drag and drop
         const fileLabel = document.querySelector('.file-label');
@@ -452,7 +464,7 @@
             e.preventDefault();
             fileLabel.style.background = '#f0f0f0';
             selectedFiles = Array.from(e.dataTransfer.files);
-            document.getElementById('fileInput').files = e.dataTransfer.items[0].getAsFile();
+            updateFileLabel();
         });
 
         // Upload handler
@@ -472,19 +484,26 @@
             });
 
             try {
-                const response = await fetch('/api/documents', {
+                const response = await fetch('/api/documents/', {
                     method: 'POST',
                     body: formData,
                 });
 
                 if (!response.ok) {
-                    const error = await response.json();
-                    alert(`Upload failed: ${error.detail || 'Unknown error'}`);
+                    let errorMsg = 'Unknown error';
+                    try {
+                        const error = await response.json();
+                        errorMsg = error.detail || JSON.stringify(error);
+                    } catch (e) {
+                        errorMsg = `HTTP ${response.status}`;
+                    }
+                    alert(`Upload failed: ${errorMsg}`);
                     return;
                 }
 
                 selectedFiles = [];
                 document.getElementById('fileInput').value = '';
+                updateFileLabel();
 
                 // Start polling for status updates
                 pollDocuments();
@@ -499,7 +518,7 @@
         // Poll documents list for status updates
         async function pollDocuments() {
             try {
-                const response = await fetch('/api/documents');
+                const response = await fetch('/api/documents/');
                 const data = await response.json();
                 renderDocuments(data.documents);
 
@@ -586,7 +605,7 @@
             isLoadingMessage = true;
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch('/api/chat/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
