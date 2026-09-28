@@ -187,3 +187,33 @@ async def delete_document(doc_id: str):
     registry.delete(doc_id)
 
     return {"status": "deleted", "doc_id": doc_id}
+
+
+@router.post("/clean")
+async def clean_all():
+    """
+    Delete ALL documents: remove all files, registry, and Chroma data.
+    """
+    registry = get_registry()
+    vectorstore = get_vectorstore()
+    upload_dir = settings.get_upload_path()
+
+    # Get all documents
+    documents = registry.list_all()
+
+    # Delete each document
+    for doc in documents:
+        doc_id = doc["doc_id"]
+
+        # Remove from Chroma
+        vectorstore.delete(doc_id)
+
+        # Remove from filesystem
+        pdf_path = upload_dir / f"{doc_id}.pdf"
+        if pdf_path.exists():
+            pdf_path.unlink()
+
+        # Remove from registry
+        registry.delete(doc_id)
+
+    return {"status": "cleaned", "message": "All documents deleted"}

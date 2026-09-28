@@ -114,6 +114,27 @@
             cursor: not-allowed;
         }
 
+        .clean-btn {
+            padding: 10px 15px;
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: opacity 0.2s;
+            font-size: 16px;
+        }
+
+        .clean-btn:hover {
+            opacity: 0.9;
+        }
+
+        .clean-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .documents-list {
             flex: 1;
             overflow-y: auto;
@@ -371,9 +392,14 @@
                             Click to select PDFs or drag & drop
                         </label>
                     </div>
-                    <button class="upload-btn" id="uploadBtn" onclick="handleUpload()">
-                        Upload
-                    </button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="upload-btn" id="uploadBtn" onclick="handleUpload()" style="flex: 1;">
+                            Upload
+                        </button>
+                        <button class="clean-btn" id="cleanBtn" onclick="handleClean()" title="Delete all documents and clear chat">
+                            🗑️ Clean
+                        </button>
+                    </div>
                 </div>
 
                 <div class="documents-list" id="documentsList">
@@ -512,6 +538,54 @@
             } finally {
                 uploadBtn.disabled = false;
                 isUploading = false;
+            }
+        }
+
+        async function handleClean() {
+            if (!confirm('⚠️  This will delete ALL uploaded documents and clear chat history. Continue?')) {
+                return;
+            }
+
+            const cleanBtn = document.getElementById('cleanBtn');
+            const uploadBtn = document.getElementById('uploadBtn');
+            cleanBtn.disabled = true;
+            uploadBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/documents/clean', {
+                    method: 'POST',
+                });
+
+                if (!response.ok) {
+                    let errorMsg = 'Unknown error';
+                    try {
+                        const error = await response.json();
+                        errorMsg = error.detail || JSON.stringify(error);
+                    } catch (e) {
+                        errorMsg = `HTTP ${response.status}`;
+                    }
+                    alert(`Clean failed: ${errorMsg}`);
+                    return;
+                }
+
+                // Clear browser storage
+                sessionStorage.removeItem('chatHistory');
+                localStorage.removeItem('chatHistory');
+
+                // Reset UI
+                chatHistory = [];
+                selectedFiles = [];
+                document.getElementById('fileInput').value = '';
+                updateFileLabel();
+                renderDocuments([]);
+                renderChat();
+
+                alert('✅ All documents and chat history cleared!');
+            } catch (error) {
+                alert(`Clean error: ${error.message}`);
+            } finally {
+                cleanBtn.disabled = false;
+                uploadBtn.disabled = false;
             }
         }
 
