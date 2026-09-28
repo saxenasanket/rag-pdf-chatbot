@@ -29,9 +29,14 @@ class Source(BaseModel):
     snippet: str
 
 
+class Message(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str
-    history: List[dict] = []
+    history: List[Message] = []
 
 
 class ChatResponse(BaseModel):

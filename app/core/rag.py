@@ -75,7 +75,7 @@ class RAGEngine:
 
         full_message = f"Context:\n{context}\n\nQuestion: {question}"
 
-        messages = history + [{"role": "user", "content": full_message}]
+        messages = [msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in history] + [{"role": "user", "content": full_message}]
 
         response = self.client.messages.create(
             model=self.model,
