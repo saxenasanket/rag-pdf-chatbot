@@ -519,6 +519,10 @@
         async function pollDocuments() {
             try {
                 const response = await fetch('/api/documents/');
+                if (!response.ok) {
+                    console.error('Failed to fetch documents:', response.status);
+                    return;
+                }
                 const data = await response.json();
                 renderDocuments(data.documents);
 
@@ -719,7 +723,12 @@
 
         // Initial load
         loadChatHistory();
-        pollDocuments();
+        pollDocuments();  // Load documents from server
+
+        // Ensure documents are refreshed on page load (catches already-uploaded files)
+        setTimeout(() => {
+            pollDocuments();
+        }, 500);
     </script>
 </body>
 </html>
