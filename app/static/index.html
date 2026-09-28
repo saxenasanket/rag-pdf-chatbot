@@ -643,6 +643,38 @@
             }
         }
 
+        // Utility: escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;',
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        // Convert markdown to HTML for display
+        function markdownToHtml(text) {
+            // First escape HTML
+            let html = escapeHtml(text);
+
+            // Convert markdown bold **text** to <strong>text</strong>
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+            // Convert markdown italic *text* to <em>text</em>
+            html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+            // Convert markdown italic _text_ to <em>text</em>
+            html = html.replace(/_(.+?)_/g, '<em>$1</em>');
+
+            // Convert line breaks to <br>
+            html = html.replace(/\n/g, '<br>');
+
+            return html;
+        }
+
         // Render chat messages
         function renderChat() {
             const messagesDiv = document.getElementById('chatMessages');
@@ -660,7 +692,7 @@
             messagesDiv.innerHTML = chatHistory.map(msg => `
                 <div class="message ${msg.role}">
                     <div class="message-bubble">
-                        ${escapeHtml(msg.content)}
+                        ${msg.role === 'assistant' ? markdownToHtml(msg.content) : escapeHtml(msg.content)}
                         ${msg.sources && msg.sources.length > 0 ? `
                             <div class="message-sources">
                                 <strong>Sources:</strong>
@@ -675,18 +707,6 @@
 
             // Scroll to bottom
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        }
-
-        // Utility: escape HTML to prevent XSS
-        function escapeHtml(text) {
-            const map = {
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#039;',
-            };
-            return text.replace(/[&<>"']/g, m => map[m]);
         }
 
         // Keyboard shortcut: Enter to send (Shift+Enter for newline)
